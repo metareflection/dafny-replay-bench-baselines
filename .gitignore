@@ -5,4 +5,5 @@ results-agent/
 .env
 .env.local
 *.log
+*.local.md
 .DS_Store

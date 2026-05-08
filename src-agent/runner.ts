@@ -5,10 +5,14 @@
 // Permissions are locked down: dontAsk + an explicit allowlist that includes
 // only `dafny verify <args>` for shell, plus Read/Edit/Write scoped naturally
 // by cwd (the per-file workdir).
-import { copyFileSync, mkdirSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { query } from "@anthropic-ai/claude-agent-sdk";
-import { runDafnyVerify, summarizeErrors } from "../src/dafny.js";
+import {
+  countAxiomAttributes,
+  runDafnyVerify,
+  summarizeErrors,
+} from "../src/dafny.js";
 
 // Route the SDK through Bedrock with the same AWS creds the original
 // baseline uses. Set before the first query() call.
@@ -22,6 +26,9 @@ export interface AgentRunOptions {
   outputDir: string;
   model?: string;
   maxTurns?: number;
+  // Optional extra system-prompt content appended after the base prompt.
+  // Loaded by the CLI from --extra-prompt <path>; empty when not provided.
+  extraSystemPrompt?: string;
 }
 
 export interface AgentFileResult {
@@ -33,6 +40,8 @@ export interface AgentFileResult {
   turnsUsed: number;
   totalCostUsd: number;
   finalVerified: boolean;
+  dafnyExitOk: boolean;
+  axiomCount: number;
   finalVerifierSummary: string;
   modelResultText: string;
   stopReason?: string;
@@ -82,12 +91,15 @@ export async function runAgentOnFile(
   let stopReason: string | undefined;
   let agentError: string | undefined;
 
+  const extra = opts.extraSystemPrompt?.trim();
+  const systemPrompt = extra ? `${SYSTEM_PROMPT}\n\n${extra}` : SYSTEM_PROMPT;
+
   try {
     for await (const msg of query({
       prompt: `Make ${opts.fileName} verify with \`dafny verify\`.`,
       options: {
         model: opts.model ?? "us.anthropic.claude-opus-4-7",
-        systemPrompt: SYSTEM_PROMPT,
+        systemPrompt,
         cwd: workDir,
         permissionMode: "dontAsk",
         allowedTools: [
@@ -105,11 +117,15 @@ export async function runAgentOnFile(
       if (m.type === "system" && m.subtype === "init") {
         sessionId = m.session_id;
       }
-      if (m.type === "assistant") turnsUsed++;
       if (m.type === "result") {
         resultText = m.result ?? "";
         totalCostUsd = m.total_cost_usd ?? 0;
         stopReason = m.subtype;
+        // SDK's authoritative turn count (one per LLM API call). Don't
+        // count `assistant` SDK events directly — the SDK emits one event
+        // per content block (text/thinking/tool_use), so a single API
+        // turn produces 2-3 events.
+        turnsUsed = m.num_turns ?? turnsUsed;
       }
     }
   } catch (err: any) {
@@ -120,8 +136,15 @@ export async function runAgentOnFile(
   }
 
   const v = await runDafnyVerify(join(workDir, opts.fileName), {});
-  const finalVerified = v.ok;
-  const finalVerifierSummary = summarizeErrors(v);
+  const dafnyExitOk = v.ok;
+  const finalSrc = readFileSync(join(workDir, opts.fileName), "utf8");
+  const axiomCount = countAxiomAttributes(finalSrc);
+  const finalVerified = dafnyExitOk && axiomCount === 0;
+  const baseSummary = summarizeErrors(v);
+  const finalVerifierSummary =
+    dafnyExitOk && axiomCount > 0
+      ? `${baseSummary}\n[rejected] ${axiomCount} {:axiom} attribute(s) remain in the patched file; not counted as solved.`
+      : baseSummary;
 
   const result: AgentFileResult = {
     file: opts.fileName,
@@ -132,6 +155,8 @@ export async function runAgentOnFile(
     turnsUsed,
     totalCostUsd,
     finalVerified,
+    dafnyExitOk,
+    axiomCount,
     finalVerifierSummary,
     modelResultText: resultText,
     stopReason,

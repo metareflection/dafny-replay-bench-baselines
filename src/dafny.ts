@@ -62,6 +62,23 @@ export async function runDafnyVerify(
   });
 }
 
+// Count {:axiom}-attributed declarations in a Dafny source. The {:axiom}
+// attribute is Dafny's way to mark a deliberate trusted assumption — it
+// suppresses the default --allow-axioms warning, so `assume {:axiom} false`
+// or `lemma {:axiom} Foo` slip past `dafny verify` silently. Files with any
+// {:axiom} attribute must not count as solved.
+//
+// Bare `assume P;` (no attribute) is already caught by Dafny's default
+// --allow-axioms=False warning, which fails verification, so it doesn't
+// need a separate check.
+export function countAxiomAttributes(src: string): number {
+  const stripped = src
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/\/\/.*$/gm, "")
+    .replace(/"(?:[^"\\]|\\.)*"/g, '""');
+  return (stripped.match(/\{\s*:\s*axiom\b/g) ?? []).length;
+}
+
 export function summarizeErrors(result: DafnyResult): string {
   if (result.timedOut) {
     return `Dafny timed out after ${result.durationMs} ms.`;

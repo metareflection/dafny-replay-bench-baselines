@@ -1,4 +1,4 @@
-import { mkdirSync, readdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { runAgentOnFile, type AgentFileResult } from "./runner.js";
 
@@ -10,6 +10,8 @@ interface CliArgs {
   model: string;
   maxTurns: number;
   concurrency: number;
+  extraPromptPath?: string;
+  extraSystemPrompt: string;
 }
 
 function parseArgs(argv: string[]): CliArgs {
@@ -44,6 +46,9 @@ function parseArgs(argv: string[]): CliArgs {
       case "--concurrency":
         args.concurrency = Number(next());
         break;
+      case "--extra-prompt":
+        args.extraPromptPath = next();
+        break;
       case "--all":
         break;
       case "-h":
@@ -67,6 +72,9 @@ function parseArgs(argv: string[]): CliArgs {
     args.model ??
     process.env.BEDROCK_MODEL_ID ??
     "us.anthropic.claude-opus-4-7";
+  args.extraSystemPrompt = args.extraPromptPath
+    ? readFileSync(resolve(args.extraPromptPath), "utf8")
+    : "";
   return args as CliArgs;
 }
 
@@ -81,6 +89,7 @@ Options:
   --model <bedrock-model-id>               default: us.anthropic.claude-opus-4-7
   --max-turns <n>                          agent turn cap per file (default 30)
   --concurrency <n>                        files in flight at once (default 1)
+  --extra-prompt <path>                    file whose contents are appended to the system prompt
   --all                                    run on every .dfy file in the mode dir
 `);
 }
@@ -120,6 +129,7 @@ async function main() {
             outputDir: args.outputDir,
             model: args.model,
             maxTurns: args.maxTurns,
+            extraSystemPrompt: args.extraSystemPrompt,
           });
           const tag = r.finalVerified ? "OK" : "FAIL";
           console.error(
