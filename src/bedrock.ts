@@ -23,7 +23,20 @@ export function makeClient(): AnthropicBedrock {
   });
 }
 
-export async function callModel(args: {
+function isRetryableStreamError(err: unknown): boolean {
+  const msg =
+    err instanceof Error
+      ? err.message
+      : typeof err === "string"
+        ? err
+        : String(err);
+  // undici / Bedrock-side mid-stream drops + a few standard transient codes.
+  return /terminated|ECONNRESET|EPIPE|socket hang up|ETIMEDOUT|fetch failed|network error/i.test(
+    msg,
+  );
+}
+
+async function callModelOnce(args: {
   client: AnthropicBedrock;
   model: string;
   system: string;
@@ -46,7 +59,12 @@ export async function callModel(args: {
       role: t.role,
       content: [{ type: "text", text: t.content }],
     })) as any,
-    ...(args.thinking ? { thinking: { type: "adaptive" } } : {}),
+    // `display: "summarized"` keeps the SSE stream non-idle during long
+    // adaptive thinking, which avoids `terminated` mid-stream drops on
+    // Bedrock when the model thinks for several minutes.
+    ...(args.thinking
+      ? { thinking: { type: "adaptive", display: "summarized" } }
+      : {}),
     ...(args.effort
       ? { output_config: { effort: args.effort } as any }
       : {}),
@@ -70,4 +88,34 @@ export async function callModel(args: {
     stopReason: message.stop_reason ?? null,
     raw: message,
   };
+}
+
+export async function callModel(args: {
+  client: AnthropicBedrock;
+  model: string;
+  system: string;
+  history: ChatTurn[];
+  maxTokens?: number;
+  effort?: "low" | "medium" | "high" | "xhigh" | "max";
+  thinking?: boolean;
+  maxAttempts?: number;
+}): Promise<CallResult> {
+  const maxAttempts = args.maxAttempts ?? 3;
+  let lastErr: unknown;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      return await callModelOnce(args);
+    } catch (err) {
+      lastErr = err;
+      if (!isRetryableStreamError(err) || attempt === maxAttempts) {
+        throw err;
+      }
+      const backoffMs = 1000 * 2 ** (attempt - 1);
+      console.error(
+        `[callModel] attempt ${attempt} failed (${(err as Error).message}); retrying in ${backoffMs}ms`,
+      );
+      await new Promise((r) => setTimeout(r, backoffMs));
+    }
+  }
+  throw lastErr;
 }
