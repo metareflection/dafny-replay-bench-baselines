@@ -2,7 +2,7 @@
 
 Baselines for the [dafny-replay-bench](https://github.com/metareflection/dafny-replay-bench) benchmark.
 
-The first baseline (`src/`) drives Claude Opus 4.7 on AWS Bedrock through up to N iterations of `dafny verify` → unified-diff feedback per file. Patches are applied via `patch(1) --fuzz=3`, so minor context drift is tolerated.
+The first baseline (`src/`) drives Claude Opus 4.7 on AWS Bedrock through up to N iterations of `dafny verify` → SEARCH/REPLACE-block feedback per file (aider-style). Edits apply atomically: snapshot in memory, all blocks must match uniquely, on-disk write only on full success. Whitespace-tolerant matching is used as a fallback when an exact match fails.
 
 ## Setup
 
@@ -49,4 +49,4 @@ Per run: `results/summary-<mode>-<timestamp>.json` with one row per file.
 
 - The runner copies each input file into the output workspace before patching — the source benchmark dir is never modified.
 - `dafny verify` exit codes: `0` = verified, `4` = errors, other = environment issue. Stdout is captured into the next prompt.
-- Failed patches do not advance the verify state; the model is told its diff didn't apply and gets another shot within the iteration budget.
+- Failed edits do not advance the verify state; the model is told which SEARCH block didn't match (and why — text not found vs. matched in multiple places) and gets another shot within the iteration budget.

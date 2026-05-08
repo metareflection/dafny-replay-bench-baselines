@@ -1,7 +1,7 @@
 import { copyFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { runDafnyVerify, summarizeErrors } from "./dafny.js";
-import { extractDiffs, applyDiffs } from "./patch.js";
+import { extractEdits, applyEdits } from "./patch.js";
 import {
   SYSTEM_PROMPT,
   initialUserPrompt,
@@ -13,7 +13,7 @@ export interface IterationLog {
   index: number;
   userPromptChars: number;
   modelText: string;
-  diffsExtracted: number;
+  editsExtracted: number;
   patchApplied: boolean;
   patchOutput: string;
   verifyOk: boolean;
@@ -109,8 +109,8 @@ export async function runOnFile(opts: RunOptions): Promise<FileResult> {
     });
     history.push({ role: "assistant", content: call.text });
 
-    const diffs = extractDiffs(call.text);
-    const patch = await applyDiffs(workPath, diffs);
+    const diffs = extractEdits(call.text);
+    const patch = await applyEdits(workPath, diffs);
 
     let verifyOk = false;
     let verifyDurationMs = 0;
@@ -131,7 +131,7 @@ export async function runOnFile(opts: RunOptions): Promise<FileResult> {
       index: i,
       userPromptChars: userPrompt.length,
       modelText: call.text,
-      diffsExtracted: diffs.length,
+      editsExtracted: diffs.length,
       patchApplied: patch.applied,
       patchOutput: patch.rawOutput,
       verifyOk,
