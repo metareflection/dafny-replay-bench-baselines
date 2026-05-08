@@ -36,6 +36,7 @@ export interface AgentFileResult {
   finalVerifierSummary: string;
   modelResultText: string;
   stopReason?: string;
+  agentError?: string;
   transcript: unknown[];
 }
 
@@ -79,35 +80,43 @@ export async function runAgentOnFile(
   let totalCostUsd = 0;
   let turnsUsed = 0;
   let stopReason: string | undefined;
+  let agentError: string | undefined;
 
-  for await (const msg of query({
-    prompt: `Make ${opts.fileName} verify with \`dafny verify\`.`,
-    options: {
-      model: opts.model ?? "us.anthropic.claude-opus-4-7",
-      systemPrompt: SYSTEM_PROMPT,
-      cwd: workDir,
-      permissionMode: "dontAsk",
-      allowedTools: [
-        "Read",
-        "Edit",
-        "Write",
-        "Bash(dafny verify *)",
-      ],
-      settingSources: [],
-      maxTurns: opts.maxTurns ?? 30,
-    },
-  })) {
-    transcript.push(msg);
-    const m = msg as any;
-    if (m.type === "system" && m.subtype === "init") {
-      sessionId = m.session_id;
+  try {
+    for await (const msg of query({
+      prompt: `Make ${opts.fileName} verify with \`dafny verify\`.`,
+      options: {
+        model: opts.model ?? "us.anthropic.claude-opus-4-7",
+        systemPrompt: SYSTEM_PROMPT,
+        cwd: workDir,
+        permissionMode: "dontAsk",
+        allowedTools: [
+          "Read",
+          "Edit",
+          "Write",
+          "Bash(dafny verify *)",
+        ],
+        settingSources: [],
+        maxTurns: opts.maxTurns ?? 30,
+      },
+    })) {
+      transcript.push(msg);
+      const m = msg as any;
+      if (m.type === "system" && m.subtype === "init") {
+        sessionId = m.session_id;
+      }
+      if (m.type === "assistant") turnsUsed++;
+      if (m.type === "result") {
+        resultText = m.result ?? "";
+        totalCostUsd = m.total_cost_usd ?? 0;
+        stopReason = m.subtype;
+      }
     }
-    if (m.type === "assistant") turnsUsed++;
-    if (m.type === "result") {
-      resultText = m.result ?? "";
-      totalCostUsd = m.total_cost_usd ?? 0;
-      stopReason = m.subtype;
-    }
+  } catch (err: any) {
+    // The SDK throws on conditions like max-turns reached. Capture the
+    // message and fall through so we still re-verify and write result.json.
+    agentError = err?.message ?? String(err);
+    if (!stopReason) stopReason = "agent_error";
   }
 
   const v = await runDafnyVerify(join(workDir, opts.fileName), {});
@@ -126,6 +135,7 @@ export async function runAgentOnFile(
     finalVerifierSummary,
     modelResultText: resultText,
     stopReason,
+    agentError,
     transcript,
   };
   writeFileSync(
