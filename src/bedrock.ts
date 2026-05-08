@@ -18,8 +18,13 @@ export interface ChatTurn {
 }
 
 export function makeClient(): AnthropicBedrock {
+  // Setting `timeout` at the client level bypasses the SDK's max_tokens
+  // heuristic that otherwise refuses non-streaming requests when it estimates
+  // the response could exceed 10 minutes. We need long-form non-streaming
+  // because Bedrock's SSE drops idle streams during long adaptive thinking.
   return new AnthropicBedrock({
     awsRegion: process.env.AWS_REGION ?? "us-east-1",
+    timeout: 30 * 60 * 1000, // 30 min
   });
 }
 
@@ -44,33 +49,36 @@ async function callModelOnce(args: {
   maxTokens?: number;
   effort?: "low" | "medium" | "high" | "xhigh" | "max";
   thinking?: boolean;
+  timeoutMs?: number;
 }): Promise<CallResult> {
-  const stream = await args.client.messages.stream({
-    model: args.model,
-    max_tokens: args.maxTokens ?? 64000,
-    system: [
-      {
-        type: "text",
-        text: args.system,
-        cache_control: { type: "ephemeral" },
-      },
-    ] as any,
-    messages: args.history.map((t) => ({
-      role: t.role,
-      content: [{ type: "text", text: t.content }],
-    })) as any,
-    // `display: "summarized"` keeps the SSE stream non-idle during long
-    // adaptive thinking, which avoids `terminated` mid-stream drops on
-    // Bedrock when the model thinks for several minutes.
-    ...(args.thinking
-      ? { thinking: { type: "adaptive", display: "summarized" } }
-      : {}),
-    ...(args.effort
-      ? { output_config: { effort: args.effort } as any }
-      : {}),
-  } as any);
-
-  const message = await stream.finalMessage();
+  // Non-streaming on purpose. We have no need for token-by-token output (we
+  // wait for the final message and parse SEARCH/REPLACE blocks), and SSE on
+  // Bedrock proved fragile when adaptive thinking idles the stream for many
+  // minutes. The SDK's default per-request timeout is generous; we override
+  // it explicitly to allow long thinking sessions.
+  const timeoutMs = args.timeoutMs ?? 30 * 60 * 1000; // 30 min
+  const message = await args.client.messages.create(
+    {
+      model: args.model,
+      max_tokens: args.maxTokens ?? 64000,
+      system: [
+        {
+          type: "text",
+          text: args.system,
+          cache_control: { type: "ephemeral" },
+        },
+      ] as any,
+      messages: args.history.map((t) => ({
+        role: t.role,
+        content: [{ type: "text", text: t.content }],
+      })) as any,
+      ...(args.thinking ? { thinking: { type: "adaptive" } } : {}),
+      ...(args.effort
+        ? { output_config: { effort: args.effort } as any }
+        : {}),
+    } as any,
+    { timeout: timeoutMs },
+  );
   const text = message.content
     .filter((b: any) => b.type === "text")
     .map((b: any) => b.text)
@@ -99,6 +107,7 @@ export async function callModel(args: {
   effort?: "low" | "medium" | "high" | "xhigh" | "max";
   thinking?: boolean;
   maxAttempts?: number;
+  timeoutMs?: number;
 }): Promise<CallResult> {
   const maxAttempts = args.maxAttempts ?? 3;
   let lastErr: unknown;
