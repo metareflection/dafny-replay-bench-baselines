@@ -1,0 +1,20 @@
+{
+  "name": "dafny-replay-bench-baselines",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Baselines for the dafny-replay-bench benchmark",
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "run": "tsx src/index.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@anthropic-ai/bedrock-sdk": "^0.29.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0"
+  }
+}
