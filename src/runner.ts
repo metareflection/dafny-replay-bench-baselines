@@ -63,7 +63,7 @@ export async function runOnFile(opts: RunOptions): Promise<FileResult> {
   const initialSummary = summarizeErrors(initial);
 
   if (initial.ok) {
-    return {
+    const earlyResult: FileResult = {
       file: opts.fileName,
       mode: opts.mode,
       startedAt,
@@ -74,6 +74,11 @@ export async function runOnFile(opts: RunOptions): Promise<FileResult> {
       iterations: [],
       finalVerifierSummary: initialSummary,
     };
+    writeFileSync(
+      join(workDir, "result.json"),
+      JSON.stringify(earlyResult, null, 2),
+    );
+    return earlyResult;
   }
 
   const history: ChatTurn[] = [];
