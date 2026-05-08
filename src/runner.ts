@@ -112,7 +112,14 @@ export async function runOnFile(opts: RunOptions): Promise<FileResult> {
       effort: opts.effort,
       thinking: opts.thinking,
     });
-    history.push({ role: "assistant", content: call.text });
+    // The Bedrock API rejects empty text content blocks. If the model
+    // returned no text (e.g., ran out of output budget mid-thinking), replace
+    // with a non-empty sentinel so subsequent iterations don't 400.
+    const assistantContent =
+      call.text.trim().length > 0
+        ? call.text
+        : "[no text content returned — model produced only thinking blocks or hit max_tokens during thinking]";
+    history.push({ role: "assistant", content: assistantContent });
 
     const diffs = extractEdits(call.text);
     const patch = await applyEdits(workPath, diffs);
