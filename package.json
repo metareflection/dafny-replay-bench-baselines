@@ -7,10 +7,12 @@
   "scripts": {
     "build": "tsc",
     "run": "tsx src/index.ts",
+    "run-agent": "tsx src-agent/index.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@anthropic-ai/bedrock-sdk": "^0.29.0"
+    "@anthropic-ai/bedrock-sdk": "^0.29.0",
+    "@anthropic-ai/claude-agent-sdk": "^0.2.133"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

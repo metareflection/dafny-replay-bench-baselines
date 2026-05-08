@@ -2,7 +2,10 @@
 
 Baselines for the [dafny-replay-bench](https://github.com/metareflection/dafny-replay-bench) benchmark.
 
-The first baseline (`src/`) drives Claude Opus 4.7 on AWS Bedrock through up to N iterations of `dafny verify` → SEARCH/REPLACE-block feedback per file (aider-style). Edits apply atomically: snapshot in memory, all blocks must match uniquely, on-disk write only on full success. Whitespace-tolerant matching is used as a fallback when an exact match fails.
+Two baselines, both running Claude Opus 4.7 on AWS Bedrock:
+
+- **`src/`** — minimal feedback loop. Up to N iterations of `dafny verify` → SEARCH/REPLACE-block feedback per file (aider-style). Edits apply atomically: snapshot in memory, all blocks must match uniquely, on-disk write only on full success. Whitespace-tolerant matching is used as a fallback when an exact match fails.
+- **`src-agent/`** — Claude Agent SDK runner. Claude drives `Edit` and `Bash(dafny verify *)` itself in a per-file workdir; permissions are locked down (`dontAsk` + explicit allowlist) so the only shell command available is `dafny verify`. Each turn is short, so single-request timeouts and SSE drops can no longer kill a run.
 
 ## Setup
 
@@ -30,6 +33,13 @@ Full sweep over a mode:
 ```bash
 npm run run -- --mode bodies_erased --all
 npm run run -- --mode helpers_removed --all --concurrency 4
+```
+
+Agent SDK baseline (writes to `results-agent/`):
+
+```bash
+npm run run-agent -- --mode bodies_erased --file Authority.dfy
+npm run run-agent -- --mode bodies_erased --all --concurrency 4
 ```
 
 Common flags (see `--help`):

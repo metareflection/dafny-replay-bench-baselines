@@ -1,6 +1,7 @@
 node_modules/
 dist/
 results/
+results-agent/
 .env
 .env.local
 *.log
