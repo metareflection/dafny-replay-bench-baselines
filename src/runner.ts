@@ -1,6 +1,10 @@
 import { copyFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
-import { runDafnyVerify, summarizeErrors } from "./dafny.js";
+import {
+  countAxiomAttributes,
+  runDafnyVerify,
+  summarizeErrors,
+} from "./dafny.js";
 import { extractEdits, applyEdits } from "./patch.js";
 import {
   SYSTEM_PROMPT,
@@ -17,6 +21,7 @@ export interface IterationLog {
   patchApplied: boolean;
   patchOutput: string;
   verifyOk: boolean;
+  axiomCount: number;
   verifyDurationMs: number;
   verifierSummary: string;
   usage: unknown;
@@ -30,6 +35,8 @@ export interface FileResult {
   totalIterations: number;
   initiallyVerified: boolean;
   finalVerified: boolean;
+  dafnyExitOk: boolean;
+  axiomCount: number;
   iterations: IterationLog[];
   finalVerifierSummary: string;
 }
@@ -44,6 +51,9 @@ export interface RunOptions {
   effort?: "low" | "medium" | "high" | "xhigh" | "max";
   thinking?: boolean;
   dafnyTimeoutMs?: number;
+  // Optional extra system-prompt content appended after the base prompt.
+  // Loaded by the CLI from --extra-prompt <path>; empty when not provided.
+  extraSystemPrompt?: string;
 }
 
 export async function runOnFile(opts: RunOptions): Promise<FileResult> {
@@ -63,6 +73,7 @@ export async function runOnFile(opts: RunOptions): Promise<FileResult> {
   const initialSummary = summarizeErrors(initial);
 
   if (initial.ok) {
+    const initialAxioms = countAxiomAttributes(readFileSync(workPath, "utf8"));
     const earlyResult: FileResult = {
       file: opts.fileName,
       mode: opts.mode,
@@ -70,9 +81,14 @@ export async function runOnFile(opts: RunOptions): Promise<FileResult> {
       finishedAt: new Date().toISOString(),
       totalIterations: 0,
       initiallyVerified: true,
-      finalVerified: true,
+      finalVerified: initialAxioms === 0,
+      dafnyExitOk: true,
+      axiomCount: initialAxioms,
       iterations: [],
-      finalVerifierSummary: initialSummary,
+      finalVerifierSummary:
+        initialAxioms > 0
+          ? `${initialSummary}\n[rejected] ${initialAxioms} {:axiom} attribute(s) in input file; not counted as solved.`
+          : initialSummary,
     };
     writeFileSync(
       join(workDir, "result.json"),
@@ -81,10 +97,15 @@ export async function runOnFile(opts: RunOptions): Promise<FileResult> {
     return earlyResult;
   }
 
+  const extra = opts.extraSystemPrompt?.trim();
+  const systemPrompt = extra ? `${SYSTEM_PROMPT}\n\n${extra}` : SYSTEM_PROMPT;
+
   const history: ChatTurn[] = [];
   const iterations: IterationLog[] = [];
   let lastVerifierSummary = initialSummary;
   let finalVerified = false;
+  let lastDafnyExitOk = false;
+  let lastAxiomCount = 0;
 
   for (let i = 1; i <= opts.maxIterations; i++) {
     let userPrompt: string;
@@ -107,7 +128,7 @@ export async function runOnFile(opts: RunOptions): Promise<FileResult> {
     const call = await callModel({
       client,
       model: opts.model,
-      system: SYSTEM_PROMPT,
+      system: systemPrompt,
       history,
       effort: opts.effort,
       thinking: opts.thinking,
@@ -125,6 +146,7 @@ export async function runOnFile(opts: RunOptions): Promise<FileResult> {
     const patch = await applyEdits(workPath, diffs);
 
     let verifyOk = false;
+    let axiomCount = 0;
     let verifyDurationMs = 0;
     let verifierSummary = "[patch did not apply; skipped verify]";
     if (patch.applied) {
@@ -133,8 +155,15 @@ export async function runOnFile(opts: RunOptions): Promise<FileResult> {
       });
       verifyOk = v.ok;
       verifyDurationMs = v.durationMs;
-      verifierSummary = summarizeErrors(v);
+      axiomCount = countAxiomAttributes(readFileSync(workPath, "utf8"));
+      const baseSummary = summarizeErrors(v);
+      verifierSummary =
+        verifyOk && axiomCount > 0
+          ? `${baseSummary}\n[rejected] ${axiomCount} {:axiom} attribute(s) remain in the patched file; not counted as solved. Replace each with a real proof.`
+          : baseSummary;
       lastVerifierSummary = verifierSummary;
+      lastDafnyExitOk = verifyOk;
+      lastAxiomCount = axiomCount;
     } else {
       // Don't update lastVerifierSummary; model retries from same state next iter.
     }
@@ -147,12 +176,13 @@ export async function runOnFile(opts: RunOptions): Promise<FileResult> {
       patchApplied: patch.applied,
       patchOutput: patch.rawOutput,
       verifyOk,
+      axiomCount,
       verifyDurationMs,
       verifierSummary,
       usage: call.usage,
     });
 
-    if (verifyOk) {
+    if (verifyOk && axiomCount === 0) {
       finalVerified = true;
       break;
     }
@@ -166,6 +196,8 @@ export async function runOnFile(opts: RunOptions): Promise<FileResult> {
     totalIterations: iterations.length,
     initiallyVerified: false,
     finalVerified,
+    dafnyExitOk: lastDafnyExitOk,
+    axiomCount: lastAxiomCount,
     iterations,
     finalVerifierSummary: lastVerifierSummary,
   };

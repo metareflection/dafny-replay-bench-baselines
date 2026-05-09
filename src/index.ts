@@ -1,4 +1,4 @@
-import { mkdirSync, readdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { runOnFile, type FileResult } from "./runner.js";
 
@@ -12,6 +12,8 @@ interface CliArgs {
   effort?: "low" | "medium" | "high" | "xhigh" | "max";
   thinking: boolean;
   concurrency: number;
+  extraPromptPath?: string;
+  extraSystemPrompt: string;
 }
 
 function parseArgs(argv: string[]): CliArgs {
@@ -54,6 +56,9 @@ function parseArgs(argv: string[]): CliArgs {
       case "--concurrency":
         args.concurrency = Number(next());
         break;
+      case "--extra-prompt":
+        args.extraPromptPath = next();
+        break;
       case "--all":
         // sentinel — files left empty means "all"
         break;
@@ -78,6 +83,9 @@ function parseArgs(argv: string[]): CliArgs {
     args.model ??
     process.env.BEDROCK_MODEL_ID ??
     "us.anthropic.claude-opus-4-7";
+  args.extraSystemPrompt = args.extraPromptPath
+    ? readFileSync(resolve(args.extraPromptPath), "utf8")
+    : "";
   return args as CliArgs;
 }
 
@@ -94,6 +102,7 @@ Options:
   --effort <low|medium|high|xhigh|max>     default: xhigh
   --no-thinking                            disable adaptive thinking
   --concurrency <n>                        files in flight at once (default 1)
+  --extra-prompt <path>                    file whose contents are appended to the system prompt
   --all                                    run on every .dfy file in the mode dir
 `);
 }
@@ -135,6 +144,7 @@ async function main() {
             maxIterations: args.iterations,
             effort: args.effort,
             thinking: args.thinking,
+            extraSystemPrompt: args.extraSystemPrompt,
           });
           const tag = r.finalVerified ? "OK" : "FAIL";
           console.error(
