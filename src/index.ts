@@ -12,6 +12,7 @@ interface CliArgs {
   effort?: "low" | "medium" | "high" | "xhigh" | "max";
   thinking: boolean;
   concurrency: number;
+  requestTimeoutSec: number;
   extraPromptPath?: string;
   extraSystemPrompt: string;
 }
@@ -23,6 +24,7 @@ function parseArgs(argv: string[]): CliArgs {
     concurrency: 1,
     thinking: true,
     effort: "xhigh",
+    requestTimeoutSec: 600,
   };
   const files: string[] = [];
   for (let i = 0; i < argv.length; i++) {
@@ -58,6 +60,9 @@ function parseArgs(argv: string[]): CliArgs {
         break;
       case "--extra-prompt":
         args.extraPromptPath = next();
+        break;
+      case "--request-timeout":
+        args.requestTimeoutSec = Number(next());
         break;
       case "--all":
         // sentinel — files left empty means "all"
@@ -103,6 +108,7 @@ Options:
   --no-thinking                            disable adaptive thinking
   --concurrency <n>                        files in flight at once (default 1)
   --extra-prompt <path>                    file whose contents are appended to the system prompt
+  --request-timeout <sec>                  per-Bedrock-request timeout (default 600)
   --all                                    run on every .dfy file in the mode dir
 `);
 }
@@ -144,6 +150,7 @@ async function main() {
             maxIterations: args.iterations,
             effort: args.effort,
             thinking: args.thinking,
+            requestTimeoutMs: args.requestTimeoutSec * 1000,
             extraSystemPrompt: args.extraSystemPrompt,
           });
           const tag = r.finalVerified ? "OK" : "FAIL";

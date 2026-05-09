@@ -51,6 +51,9 @@ export interface RunOptions {
   effort?: "low" | "medium" | "high" | "xhigh" | "max";
   thinking?: boolean;
   dafnyTimeoutMs?: number;
+  // Per-Bedrock-request timeout in milliseconds. Wrapped via AbortController
+  // so that a silently-dropped TCP connection still rejects the promise.
+  requestTimeoutMs?: number;
   // Optional extra system-prompt content appended after the base prompt.
   // Loaded by the CLI from --extra-prompt <path>; empty when not provided.
   extraSystemPrompt?: string;
@@ -132,6 +135,7 @@ export async function runOnFile(opts: RunOptions): Promise<FileResult> {
       history,
       effort: opts.effort,
       thinking: opts.thinking,
+      timeoutMs: opts.requestTimeoutMs,
     });
     // The Bedrock API rejects empty text content blocks. If the model
     // returned no text (e.g., ran out of output budget mid-thinking), replace

@@ -35,7 +35,10 @@ function isRetryableStreamError(err: unknown): boolean {
       : typeof err === "string"
         ? err
         : String(err);
-  // undici / Bedrock-side mid-stream drops + a few standard transient codes.
+  const name = err instanceof Error ? err.name : "";
+  // undici / Bedrock-side mid-stream drops, our own AbortController timeouts,
+  // and a few standard transient codes.
+  if (name === "AbortError" || /aborted/i.test(msg)) return true;
   return /terminated|ECONNRESET|EPIPE|socket hang up|ETIMEDOUT|fetch failed|network error/i.test(
     msg,
   );
@@ -54,31 +57,44 @@ async function callModelOnce(args: {
   // Non-streaming on purpose. We have no need for token-by-token output (we
   // wait for the final message and parse SEARCH/REPLACE blocks), and SSE on
   // Bedrock proved fragile when adaptive thinking idles the stream for many
-  // minutes. The SDK's default per-request timeout is generous; we override
-  // it explicitly to allow long thinking sessions.
-  const timeoutMs = args.timeoutMs ?? 30 * 60 * 1000; // 30 min
-  const message = await args.client.messages.create(
-    {
-      model: args.model,
-      max_tokens: args.maxTokens ?? 64000,
-      system: [
-        {
-          type: "text",
-          text: args.system,
-          cache_control: { type: "ephemeral" },
-        },
-      ] as any,
-      messages: args.history.map((t) => ({
-        role: t.role,
-        content: [{ type: "text", text: t.content }],
-      })) as any,
-      ...(args.thinking ? { thinking: { type: "adaptive" } } : {}),
-      ...(args.effort
-        ? { output_config: { effort: args.effort } as any }
-        : {}),
-    } as any,
-    { timeout: timeoutMs },
-  );
+  // minutes.
+  //
+  // We enforce the timeout via AbortController instead of relying solely on
+  // the SDK's `timeout` option: when AWS's load balancer silently drops the
+  // underlying TCP connection during a long thinking response, undici has
+  // been observed to leave the request promise in limbo (no error, no
+  // resolution). The AbortController-driven timeout guarantees we fail and
+  // can retry instead of hanging forever.
+  const timeoutMs = args.timeoutMs ?? 10 * 60 * 1000; // 10 min
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), timeoutMs);
+  let message;
+  try {
+    message = await args.client.messages.create(
+      {
+        model: args.model,
+        max_tokens: args.maxTokens ?? 64000,
+        system: [
+          {
+            type: "text",
+            text: args.system,
+            cache_control: { type: "ephemeral" },
+          },
+        ] as any,
+        messages: args.history.map((t) => ({
+          role: t.role,
+          content: [{ type: "text", text: t.content }],
+        })) as any,
+        ...(args.thinking ? { thinking: { type: "adaptive" } } : {}),
+        ...(args.effort
+          ? { output_config: { effort: args.effort } as any }
+          : {}),
+      } as any,
+      { timeout: timeoutMs, signal: ac.signal } as any,
+    );
+  } finally {
+    clearTimeout(timer);
+  }
   const text = message.content
     .filter((b: any) => b.type === "text")
     .map((b: any) => b.text)
